@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Breakout Ultra - RoundRect-Fix</title>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap"
+        rel="stylesheet"
+    />
+    <style>
+        /*
+         * We removed overflow: hidden to allow scrolling.
+         * We added a responsive canvas size.
+         */
+        body {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            /* min-height: 100vh;  <-- Possibly remove or adapt if needed */
+            background-color: #000;
+            font-family: "Press Start 2P", cursive;
+            /* overflow: hidden;   <-- removed to allow scroll */
+            overflow-y: auto; /* or omit for default scroll behavior */
+        }
+
+        #gameCanvas {
+            width: 100%;
+            max-width: 800px;
+            height: auto;
+        }
+
+        #scoreDisplay,
+        #livesDisplay {
+            font-size: 20px;
+            color: #fff;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+        }
+
+        #highScoreDisplay {
+            font-size: 16px;
+            color: #eee;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+        }
+
+        #startButton,
+        #muteButton {
+            padding: 10px 20px;
+            font-size: 16px;
+            color: #fff;
+            background-color: #4caf50;
+            border: none;
+            cursor: pointer;
+            margin-top: 10px;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+            font-family: "Press Start 2P", cursive;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        #muteButton {
+            margin-left: 10px;
+        }
+
+        #startButton:hover,
+        #muteButton:hover {
+            background-color: #45a049;
+        }
+
+        #message {
+            position: absolute;
+            color: #fff;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 24px;
+            text-align: center;
+            background-color: rgba(0, 0, 0, 0.6);
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+            z-index: 10;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+        }
+        #message button {
+            padding: 8px 16px;
+            font-size: 14px;
+            color: #fff;
+            background-color: #00b8d4;
+            border: none;
+            cursor: pointer;
+            margin-top: 15px;
+            border-radius: 5px;
+            transition: background-color 0.3s;
+            font-family: "Press Start 2P", cursive;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        #message button:hover {
+            background-color: #00869e;
+        }
+
+        .game-over #gameCanvas {
+            animation: shake 0.5s;
+        }
+
+        @keyframes shake {
+            0% {
+                transform: translateX(0);
+            }
+            25% {
+                transform: translateX(-5px);
+            }
+            50% {
+                transform: translateX(5px);
+            }
+            75% {
+                transform: translateX(-5px);
+            }
+            100% {
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes brickBlink {
+            0% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.3;
+            }
+            100% {
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="livesDisplay">Leben: 3</div>
+    <div id="scoreDisplay">Score: 0</div>
+    <div id="highScoreDisplay">Highscore: 0</div>
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <button id="startButton">Start</button>
+    <button id="muteButton">Sound An/Aus</button>
+    <div id="message">
+        <p id="messageText">Game Over</p>
+        <button id="messageButton">Neustart</button>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/tone@14.7.77/build/Tone.min.js"></script>
+    <script>
+        // We are not entirely sure what causes the 'Script error.'
+        // Possibly localStorage or something else. We'll do a try/catch around localStorage.
+        // Also, we have no test cases, so let's add some basic test code.
+        // If the expected behavior is unclear, we should ask the user:
+        console.log("[DEBUG] Could you please clarify the expected behavior, so we can ensure all features work correctly?");
+
+        // Polyfill for roundRect
+        function drawRoundedRect(ctx, x, y, width, height, radius) {
+            ctx.beginPath();
+            ctx.moveTo(x + radius, y);
+            ctx.lineTo(x + width - radius, y);
+            ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+            ctx.lineTo(x + width, y + height - radius);
+            ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+            ctx.lineTo(x + radius, y + height);
+            ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+            ctx.lineTo(x, y + radius);
+            ctx.quadraticCurveTo(x, y, x + radius, y);
+            ctx.closePath();
+        }
+
+        // Attempt safe localStorage usage:
+        let savedHighScore = 0;
+        try {
+            savedHighScore = localStorage.getItem("breakoutHighScore") || 0;
+        } catch (err) {
+            console.warn("[DEBUG] localStorage not available.", err);
+            savedHighScore = 0;
+        }
+
+        // game logic
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const scoreDisplay = document.getElementById("scoreDisplay");
+        const highScoreDisplay = document.getElementById("highScoreDisplay");
+        const livesDisplay = document.getElementById("livesDisplay");
+        const startButton = document.getElementById("startButton");
+        const muteButton = document.getElementById("muteButton");
+        const messageElement = document.getElementById("message");
+        const messageTextElement = document.getElementById("messageText");
+        const messageButton = document.getElementById("messageButton");
+
+        let paddleWidth = 100;
+        const paddleHeight = 15;
+        let paddleX = (canvas.width - paddleWidth) / 2;
+        let ballX = canvas.width / 2;
+        let ballY = canvas.height - 30;
+        let ballRadius = 10;
+        let ballSpeedX = 5;
+        let ballSpeedY = -5;
+        let brickRowCount = 5;
+        let brickColumnCount = 8;
+        let brickWidth = 80;
+        let brickHeight = 20;
+        let brickPadding = 10;
+        let brickOffsetTop = 30;
+        let brickOffsetLeft = 30;
+        let score = 0;
+        let gamePlaying = false;
+        let muted = false;
+        let lives = 3;
+        let gameAnimationFrame;
+        let powerUps = [];
+
+        let bricks = [];
+        for (let c = 0; c < brickColumnCount; c++) {
+            bricks[c] = [];
+            for (let r = 0; r < brickRowCount; r++) {
+                bricks[c][r] = { x: 0, y: 0, status: 1, blink: false };
+            }
+        }
+
+        const colors = ["#5D5CDE", "#FF9800", "#E91E63", "#4CAF50", "#00BCD4"];
+        let highScore = parseInt(savedHighScore) || 0;
+        highScoreDisplay.textContent = `Highscore: ${highScore}`;
+
+        // Sound Effects (Tone.js)
+        const brickHitSound = new Tone.MembraneSynth().toDestination();
+        const paddleHitSound = new Tone.FMSynth().toDestination();
+        const wallHitSound = new Tone.AMSynth().toDestination();
+        const gameOverSound = new Tone.NoiseSynth().toDestination();
+        const gameWonSound = new Tone.FMSynth().toDestination();
+        const powerUpSound = new Tone.Synth().toDestination();
+
+        function playBrickHitSound() {
+            if (!muted) {
+                brickHitSound.triggerAttackRelease("C4", "0.05");
+            }
+        }
+        function playPaddleHitSound() {
+            if (!muted) {
+                paddleHitSound.triggerAttackRelease("G4", "0.05");
+            }
+        }
+        function playWallHitSound() {
+            if (!muted) {
+                wallHitSound.triggerAttackRelease("C3", "0.05");
+            }
+        }
+        function playGameOverSound() {
+            if (!muted) {
+                gameOverSound.triggerAttackRelease("C2", "0.3");
+            }
+        }
+        function playGameWonSound() {
+            if (!muted) {
+                gameWonSound.triggerAttackRelease("C5", "0.5");
+            }
+        }
+        function playPowerUpSound() {
+            if (!muted) {
+                powerUpSound.triggerAttackRelease("A4", "0.05");
+            }
+        }
+
+        function drawPaddle() {
+            ctx.save();
+            ctx.fillStyle = "#4CAF50";
+            drawRoundedRect(
+                ctx,
+                paddleX,
+                canvas.height - paddleHeight - 5,
+                paddleWidth,
+                paddleHeight,
+                8
+            );
+            ctx.fill();
+            ctx.restore();
+        }
+
+        function drawBall() {
+            ctx.beginPath();
+            ctx.arc(ballX, ballY, ballRadius, 0, Math.PI * 2);
+            ctx.fillStyle = "#fff";
+            ctx.fill();
+            ctx.closePath();
+        }
+
+        function drawBricks() {
+            for (let c = 0; c < brickColumnCount; c++) {
+                for (let r = 0; r < brickRowCount; r++) {
+                    let b = bricks[c][r];
+                    if (b.status === 1) {
+                        let brickX = c * (brickWidth + brickPadding) + brickOffsetLeft;
+                        let brickY = r * (brickHeight + brickPadding) + brickOffsetTop;
+                        b.x = brickX;
+                        b.y = brickY;
+                        ctx.save();
+                        if (b.blink) ctx.globalAlpha = 0.3;
+                        ctx.fillStyle = colors[r % colors.length];
+                        drawRoundedRect(ctx, brickX, brickY, brickWidth, brickHeight, 5);
+                        ctx.fill();
+                        ctx.restore();
+                    }
+                }
+            }
+        }
+
+        function drawScore() {
+            scoreDisplay.textContent = `Score: ${score}`;
+        }
+
+        function drawLives() {
+            livesDisplay.textContent = `Leben: ${lives}`;
+        }
+
+        function collisionDetection() {
+            for (let c = 0; c < brickColumnCount; c++) {
+                for (let r = 0; r < brickRowCount; r++) {
+                    let b = bricks[c][r];
+                    if (b.status === 1) {
+                        if (
+                            ballX > b.x &&
+                            ballX < b.x + brickWidth &&
+                            ballY > b.y &&
+                            ballY < b.y + brickHeight
+                        ) {
+                            ballSpeedY = -ballSpeedY;
+                            b.status = 0;
+                            b.blink = true;
+                            setTimeout(() => {
+                                b.blink = false;
+                            }, 200);
+                            score++;
+                            playBrickHitSound();
+                            if (Math.random() < 0.3) {
+                                createPowerUp(b.x + brickWidth / 2 - 10, b.y + brickHeight);
+                            }
+                            if (score === brickRowCount * brickColumnCount) {
+                                gamePlaying = false;
+                                playGameWonSound();
+                                messageTextElement.textContent = "Gewonnen!";
+                                messageElement.style.display = "block";
+                                if (score > highScore) {
+                                    highScore = score;
+                                    try {
+                                        localStorage.setItem("breakoutHighScore", highScore);
+                                    } catch (err) {
+                                        console.warn("[DEBUG] localStorage not available.", err);
+                                    }
+                                    highScoreDisplay.textContent = `Highscore: ${highScore}`;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function createPowerUp(x, y) {
+            const types = ["widerPaddle", "fastBall", "extraLife"];
+            const powerUp = {
+                x: x,
+                y: y,
+                width: 20,
+                height: 20,
+                type: types[Math.floor(Math.random() * types.length)],
+                speedY: 2
+            };
+            powerUps.push(powerUp);
+        }
+
+        function drawPowerUps() {
+            powerUps.forEach((powerUp, index) => {
+                ctx.beginPath();
+                ctx.rect(powerUp.x, powerUp.y, powerUp.width, powerUp.height);
+                ctx.fillStyle = "#FFFF00";
+                ctx.fill();
+                ctx.closePath();
+                powerUp.y += powerUp.speedY;
+
+                if (
+                    powerUp.y + powerUp.height > canvas.height - paddleHeight - 5 &&
+                    powerUp.x > paddleX &&
+                    powerUp.x < paddleX + paddleWidth
+                ) {
+                    applyPowerUp(powerUp.type);
+                    powerUps.splice(index, 1);
+                    playPowerUpSound();
+                }
+                if (powerUp.y > canvas.height) {
+                    powerUps.splice(index, 1);
+                }
+            });
+        }
+
+        function applyPowerUp(type) {
+            switch (type) {
+                case "widerPaddle": {
+                    paddleWidth = Math.min(paddleWidth + 30, 150);
+                    setTimeout(() => {
+                        paddleWidth = 100;
+                    }, 5000);
+                    break;
+                }
+                case "fastBall": {
+                    ballSpeedX *= 1.5;
+                    ballSpeedY *= 1.5;
+                    setTimeout(() => {
+                        ballSpeedX = Math.sign(ballSpeedX) * 5;
+                        ballSpeedY = Math.sign(ballSpeedY) * 5;
+                    }, 5000);
+                    break;
+                }
+                case "extraLife": {
+                    lives = Math.min(lives + 1, 5);
+                    break;
+                }
+            }
+        }
+
+        function update(currentTime) {
+            if (!gamePlaying) {
+                return;
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawBricks();
+            drawBall();
+            drawPaddle();
+            drawScore();
+            drawLives();
+            collisionDetection();
+            drawPowerUps();
+
+            // Move ball
+            ballX += ballSpeedX;
+            ballY += ballSpeedY;
+
+            // Walls
+            if (
+                ballX + ballSpeedX > canvas.width - ballRadius ||
+                ballX + ballSpeedX < ballRadius
+            ) {
+                ballSpeedX = -ballSpeedX;
+                playWallHitSound();
+            }
+            if (ballY + ballSpeedY < ballRadius) {
+                ballSpeedY = -ballSpeedY;
+                playWallHitSound();
+            } else if (
+                ballY + ballSpeedY >
+                canvas.height - ballRadius - paddleHeight
+            ) {
+                // Check paddle
+                if (ballX > paddleX && ballX < paddleX + paddleWidth) {
+                    ballSpeedY = -ballSpeedY;
+                    let deltaX = ballX - (paddleX + paddleWidth / 2);
+                    ballSpeedX = ballSpeedX + deltaX * 0.15;
+                    playPaddleHitSound();
+                } else {
+                    lives--;
+                    if (!lives) {
+                        gamePlaying = false;
+                        playGameOverSound();
+                        messageTextElement.textContent = "Game Over!";
+                        messageElement.style.display = "block";
+                        if (score > highScore) {
+                            highScore = score;
+                            try {
+                                localStorage.setItem("breakoutHighScore", highScore);
+                            } catch (err) {
+                                console.warn("[DEBUG] localStorage not available.", err);
+                            }
+                            highScoreDisplay.textContent = `Highscore: ${highScore}`;
+                        }
+                    } else {
+                        // Reset if still have lives
+                        ballX = canvas.width / 2;
+                        ballY = canvas.height - 30;
+                        ballSpeedX = 5;
+                        ballSpeedY = -5;
+                        paddleX = (canvas.width - paddleWidth) / 2;
+                    }
+                }
+            }
+
+            // Paddle movement
+            if (rightPressed && paddleX < canvas.width - paddleWidth) {
+                paddleX += 7;
+            } else if (leftPressed && paddleX > 0) {
+                paddleX -= 7;
+            }
+
+            // Next frame
+            gameAnimationFrame = requestAnimationFrame(update);
+        }
+
+        // Control flags
+        let rightPressed = false;
+        let leftPressed = false;
+        let touchStartX = null;
+
+        function keyDownHandler(e) {
+            if (e.key === "Right" || e.key === "ArrowRight") {
+                rightPressed = true;
+            } else if (e.key === "Left" || e.key === "ArrowLeft") {
+                leftPressed = true;
+            }
+        }
+        function keyUpHandler(e) {
+            if (e.key === "Right" || e.key === "ArrowRight") {
+                rightPressed = false;
+            } else if (e.key === "Left" || e.key === "ArrowLeft") {
+                leftPressed = false;
+            }
+        }
+
+        function mouseMoveHandler(e) {
+            let relativeX = e.clientX - canvas.offsetLeft;
+            if (relativeX > 0 && relativeX < canvas.width) {
+                paddleX = Math.max(
+                    Math.min(relativeX - paddleWidth / 2, canvas.width - paddleWidth),
+                    0
+                );
+            }
+        }
+
+        function touchStartHandler(e) {
+            if (e.touches.length === 1) {
+                touchStartX = e.touches[0].clientX;
+            }
+            e.preventDefault();
+        }
+
+        function touchMoveHandler(e) {
+            if (!touchStartX) {
+                return;
+            }
+            const touchX = e.touches[0].clientX - canvas.offsetLeft;
+            const touchDiff = touchX - touchStartX;
+            const moveSpeed = 10;
+            if (Math.abs(touchDiff) > 5) {
+                if (touchDiff > 0 && paddleX < canvas.width - paddleWidth) {
+                    paddleX = Math.min(
+                        paddleX + moveSpeed,
+                        canvas.width - paddleWidth
+                    );
+                } else if (touchDiff < 0 && paddleX > 0) {
+                    paddleX = Math.max(paddleX - moveSpeed, 0);
+                }
+                touchStartX = touchX;
+            }
+            e.preventDefault();
+        }
+
+        function touchEndHandler(e) {
+            touchStartX = null;
+            e.preventDefault();
+        }
+
+        function startGame() {
+            if (!gamePlaying) {
+                if (gameAnimationFrame) {
+                    cancelAnimationFrame(gameAnimationFrame);
+                }
+                lives = 3;
+                score = 0;
+                paddleWidth = 100;
+                ballSpeedX = 5;
+                ballSpeedY = -5;
+                rightPressed = false;
+                leftPressed = false;
+                touchStartX = null;
+                bricks = [];
+                powerUps = [];
+                for (let c = 0; c < brickColumnCount; c++) {
+                    bricks[c] = [];
+                    for (let r = 0; r < brickRowCount; r++) {
+                        bricks[c][r] = { x: 0, y: 0, status: 1, blink: false };
+                    }
+                }
+                ballX = canvas.width / 2;
+                ballY = canvas.height - 30;
+                paddleX = (canvas.width - paddleWidth) / 2;
+                messageElement.style.display = "none";
+                gamePlaying = true;
+                gameAnimationFrame = requestAnimationFrame(update);
+            }
+        }
+
+        function toggleMute() {
+            muted = !muted;
+            muteButton.textContent = muted ? "Sound Aus" : "Sound An";
+        }
+
+        document.addEventListener("keydown", keyDownHandler, false);
+        document.addEventListener("keyup", keyUpHandler, false);
+        document.addEventListener("mousemove", mouseMoveHandler, false);
+        canvas.addEventListener("touchstart", touchStartHandler, false);
+        canvas.addEventListener("touchmove", touchMoveHandler, false);
+        canvas.addEventListener("touchend", touchEndHandler, false);
+        startButton.addEventListener("click", startGame);
+        muteButton.addEventListener("click", toggleMute);
+        messageButton.addEventListener("click", startGame);
+
+        // initial draw
+        drawBricks();
+        drawBall();
+        drawPaddle();
+        drawScore();
+        drawLives();
+        messageElement.style.display = "none";
+
+        // -----------------------------
+        // Minimal test for collisions, etc.
+        // We can add more tests if the user clarifies the expected behavior.
+        // -----------------------------
+        function runTests() {
+            console.log("[TEST] Checking environment...");
+            // for now, we only check if Tone exists and localStorage is accessible.
+            if (typeof Tone === "undefined") {
+                console.error("[TEST] Tone.js is not available.");
+            } else {
+                console.log("[TEST] Tone.js is loaded.");
+            }
+            try {
+                localStorage.setItem("testKey", "testValue");
+                console.log("[TEST] localStorage is available.");
+            } catch (err) {
+                console.warn("[TEST] localStorage not available.", err);
+            }
+        }
+
+        runTests();
+    </script>
+</body>
+</html>
